@@ -1,0 +1,360 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <style>
+        body { margin: 0; overflow: hidden; }
+        canvas { position: absolute; }
+        .cursor { 
+            position: absolute; 
+            pointer-events: none;
+            font-size: 20px;
+            z-index: 1000;
+        }
+        .cursor-name {
+            position: absolute;
+            top: -25px;
+            left: 50%;
+            transform: translateX(-50%);
+            white-space: nowrap;
+            padding: 2px 5px;
+            border-radius: 3px;
+            font-size: 14px;
+        }
+    </style>
+</head>
+
+<body>
+    <canvas id="canvas"></canvas>
+    <script src="/socket.io/socket.io.js"></script>
+    <script>
+        const socket = io();
+        const canvas = document.getElementById('canvas');
+        const ctx = canvas.getContext('2d');
+        
+        let scale = 1;
+        let offset = { x: 0, y: 0 };
+
+        let isDrawing = false;
+        let isPanning = false;
+        
+        let lastPoint = null;
+        let lastPanPoint = null;
+        
+        // Setup 
+        function UserPreferences() {
+            return {
+                name: prompt('Enter your name:'),
+                cursorColor: '#' + Math.floor(Math.random()*666).toString(16),
+                nameColor: '#' + Math.floor(Math.random()*666).toString(16),
+                nameBackground: '#' + Math.floor(Math.random()*666).toString(16),
+                lineColor: '#' + Math.floor(Math.random()*666).toString(16),
+                lineSize: 1
+            };
+        }
+        function resize() {
+            canvas.width = window.innerWidth;
+            canvas.height = window.innerHeight;
+            redraw();
+        }
+        function CustomizationUI() {
+            const container = document.createElement('div');
+            container.style.position = 'fixed';
+            container.style.top = '10px';
+            container.style.left = '10px';
+            container.style.zIndex = '1000';
+            container.style.background = 'white';
+            container.style.padding = '10px';
+            container.style.borderRadius = '5px';
+            container.style.boxShadow = '0 0 10px rgba(0,0,0,0.1)';
+
+            // Line Size
+            const lineSizeLabel = document.createElement('div');
+            lineSizeLabel.textContent = 'Line Size:';
+            const lineSizeInput = document.createElement('input');
+            lineSizeInput.type = 'number';
+            lineSizeInput.min = '1';
+            lineSizeInput.max = '10';
+            lineSizeInput.value = CurrentUser.lineSize;
+            lineSizeInput.addEventListener('change', (e) => {
+                CurrentUser.lineSize = parseInt(e.target.value);
+                sendPreferencesUpdate();
+            });
+
+            // Line Color
+            const lineColorLabel = document.createElement('div');
+            lineColorLabel.textContent = 'Line Color:';
+            const lineColorPicker = document.createElement('input');
+            lineColorPicker.type = 'color';
+            lineColorPicker.value = CurrentUser.lineColor;
+            lineColorPicker.addEventListener('change', (e) => {
+                CurrentUser.lineColor = e.target.value;
+                sendPreferencesUpdate();
+            });
+
+            // Cursor Color
+            const cursorColorLabel = document.createElement('div');
+            cursorColorLabel.textContent = 'Cursor Color:';
+            const cursorColorPicker = document.createElement('input');
+            cursorColorPicker.type = 'color';
+            cursorColorPicker.value = CurrentUser.cursorColor;
+            cursorColorPicker.addEventListener('change', (e) => {
+                CurrentUser.cursorColor = e.target.value;
+                sendPreferencesUpdate();
+            });
+
+            // Name Color
+            const nameColorLabel = document.createElement('div');
+            nameColorLabel.textContent = 'Name Color:';
+            const nameColorPicker = document.createElement('input');
+            nameColorPicker.type = 'color';
+            nameColorPicker.value = CurrentUser.nameColor;
+            nameColorPicker.addEventListener('change', (e) => {
+                CurrentUser.nameColor = e.target.value;
+                sendPreferencesUpdate();
+            });
+
+            // Name Background
+            const nameBackgroundLabel = document.createElement('div');
+            nameBackgroundLabel.textContent = 'Name Background:';
+            const nameBackgroundPicker = document.createElement('input');
+            nameBackgroundPicker.type = 'color';
+            nameBackgroundPicker.value = CurrentUser.nameBackground;
+            nameBackgroundPicker.addEventListener('change', (e) => {
+                CurrentUser.nameBackground = e.target.value;
+                sendPreferencesUpdate();
+            });
+
+            container.appendChild(lineSizeLabel);
+            container.appendChild(lineSizeInput);
+            container.appendChild(lineColorLabel);
+            container.appendChild(lineColorPicker);
+            container.appendChild(cursorColorLabel);
+            container.appendChild(cursorColorPicker);
+            container.appendChild(nameColorLabel);
+            container.appendChild(nameColorPicker);
+            container.appendChild(nameBackgroundLabel);
+            container.appendChild(nameBackgroundPicker);
+
+            container.querySelectorAll('input').forEach(input => {
+                input.style.marginBottom = '10px';
+                input.style.display = 'block';
+            });
+            container.querySelectorAll('div').forEach(div => {
+                div.style.marginBottom = '2px';
+            });
+
+            document.body.appendChild(container);
+
+            function sendPreferencesUpdate() {
+                socket.emit('update', {
+                    lineColor: CurrentUser.lineColor,
+                    lineSize: CurrentUser.lineSize,
+                    cursorColor: CurrentUser.cursorColor,
+                    nameColor: CurrentUser.nameColor,
+                    nameBackground: CurrentUser.nameBackground
+                });
+            }
+        }
+
+        // Drawing state
+        const drawings = [];
+        function draw(e) {
+            const point = screenToWorld(e.clientX, e.clientY);
+
+            if (isPanning) return;            
+            if (isDrawing) {
+                if (lastPoint) {
+                    const drawData = { 
+                        from: lastPoint, 
+                        to: point,
+                        lineColor: CurrentUser.lineColor,
+                        lineSize: CurrentUser.lineSize
+                    };
+
+                    drawings.push(drawData);
+                    drawLine(drawData);
+                    socket.emit('draw', drawData);
+                }
+                lastPoint = point;
+            }
+        }
+        function drawLine(data) {
+            ctx.save();
+            ctx.scale(scale, scale);
+            ctx.translate(offset.x, offset.y);
+            ctx.beginPath();
+            ctx.moveTo(data.from.x, data.from.y);
+            ctx.lineTo(data.to.x, data.to.y);
+            ctx.strokeStyle = data.lineColor;
+            ctx.lineWidth = (data.lineSize || 1) / scale;
+            ctx.stroke();
+            ctx.restore();
+        }
+        function redraw() {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            drawings.forEach(drawLine);
+        }
+        
+        // Coordinate conversion
+        function screenToWorld(x, y) {
+            return {
+                x: (x / scale) - offset.x,
+                y: (y / scale) - offset.y
+            };
+        }
+        function zoom(delta, centerX, centerY) {
+            const factor = Math.pow(1.1, delta);
+            const newScale = scale * factor;
+            
+            // Limit zoom level
+            if (newScale < 0.1 || newScale > 10) return;
+
+            const mouseX = (centerX / scale) - offset.x;
+            const mouseY = (centerY / scale) - offset.y;
+
+            offset.x = (centerX / newScale) - mouseX;
+            offset.y = (centerY / newScale) - mouseY;
+
+            scale = newScale;
+            redraw();
+        }
+        
+        // Event listeners
+        window.addEventListener('resize', resize);
+        canvas.addEventListener('mousedown', (e) => {
+            if (e.button === 2) {
+                isPanning = true;
+                lastPanPoint = { x: e.clientX, y: e.clientY };
+                e.preventDefault();
+
+            } else if (e.button === 0) {
+                isDrawing = true;
+                lastPoint = null;
+            }
+        });
+        canvas.addEventListener('mousemove', (e) => {            
+            if (isPanning && lastPanPoint) {
+                const dX = e.clientX - lastPanPoint.x;
+                const dY = e.clientY - lastPanPoint.y;
+
+                offset.x += dX / scale;
+                offset.y += dY / scale;
+                lastPanPoint = { x: e.clientX, y: e.clientY };
+
+                redraw();
+            } else {
+                draw(e);
+            }
+
+
+            const point = screenToWorld(e.clientX, e.clientY);
+            socket.emit('cursor', { 
+                position: point, 
+                name: CurrentUser.name,
+                cursorColor: CurrentUser.cursorColor,
+                nameColor: CurrentUser.nameColor,
+                nameBackground: CurrentUser.nameBackground
+            });
+        });
+        canvas.addEventListener('mouseup', (e) => {
+            if (e.button === 2) {
+                isPanning = false;
+            } else if (e.button === 0) {
+                isDrawing = false;
+            }
+        });
+        canvas.addEventListener('wheel', (e) => {
+            zoom(-e.deltaY / 100, e.clientX, e.clientY);
+            e.preventDefault();
+        });
+        canvas.addEventListener('contextmenu', (e) => {
+            e.preventDefault();
+        })
+        
+        // Cursor management
+        const cursors = new Map();
+        
+        function createCursor(id, userData) {
+            const cursor = document.createElement('div');
+            cursor.className = 'cursor';
+            cursor.innerHTML = '&#9658;'; // Cursor symbol
+            cursor.style.color = userData.cursorColor || '#FF0000';
+            cursor.userData = userData;
+
+            const nameTag = document.createElement('div');
+            nameTag.className = 'cursor-name';
+            nameTag.textContent = userData.name || 'Anonymous';
+            nameTag.style.color = userData.nameColor;
+            nameTag.style.background = userData.nameBackground || '#FF0000';
+
+            cursor.appendChild(nameTag);
+            document.body.appendChild(cursor);
+            return cursor;
+        }
+        function updateCursorPosition(cursor, x, y) {
+            const screenX = (x + offset.x) * scale;
+            const screenY = (y + offset.y) * scale;
+            cursor.style.transform = `translate(${screenX}px, ${screenY}px)`;
+        }
+        
+        // Socket events
+        const CurrentUser = UserPreferences();
+        CustomizationUI();
+
+        socket.emit('join', CurrentUser);
+
+        socket.on('users', (users) => {
+            users.forEach(([id, userData]) => {
+                if (id !== socket.id && !cursors.has(id)) {
+                    cursors.set(id, createCursor(id, userData));
+                }
+            });
+        });
+        socket.on('cursor', (userData) => {
+            if (!cursors.has(userData.id)) {
+                cursors.set(userData.id, createCursor(userData.id, userData));
+            }
+            const cursor = cursors.get(userData.id);
+            updateCursorPosition(cursor, userData.position.x, userData.position.y);
+        });
+        socket.on('draw', (data) => {
+            drawings.push(data);
+            drawLine(data);
+        });
+        socket.on('userLeft', (id) => {
+            if (cursors.has(id)) {
+                cursors.get(id).remove();
+                cursors.delete(id);
+            }
+        });
+        socket.on('update', (data) => {
+            if (cursors.has(data.id)) {
+                const cursor = cursors.get(data.id);
+
+                cursor.userData = {
+                    ...cursor.userData,
+                    lineColor: data.lineColor,
+                    lineSize: data.lineSize,
+                    cursorColor: data.cursorColor,
+                    nameColor: data.nameColor,
+                    nameBackground: data.nameBackground
+                };
+
+                cursor.style.color = data.cursorColor;
+                const nameTag = cursor.querySelector('.cursor-name');
+                if (nameTag) {
+                    nameTag.style.color = data.nameColor;
+                    nameTag.style.background = data.nameBackground;
+                }
+            }
+        })
+        socket.on('drawings', (data) => {
+            drawings.length = 0;
+            drawings.push(...data);
+            redraw();
+        })
+
+        resize();
+    </script>
+</body>
+</html>
