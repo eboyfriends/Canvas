@@ -6,7 +6,7 @@ const app = express();
 const server = http.createServer(app);
 const io = socketIO(server);
 
-app.get('/', (req, res) => res.sendFile(__dirname + '/client.html'));
+app.get('/', (req, res) => res.sendFile(__dirname + '/index.html'));
 
 const users = new Map();
 const drawings = [];
